@@ -1,18 +1,16 @@
 """
 Automated Microsoft Forms submitter using Playwright.
-(v4: Advanced Personas & Conditional Logic)
+(v5: Crash-Proof, Human-like Behavior)
 
 Features:
+- STATE PERSISTENCE: Saves progress to submission_state.json and resumes on restart.
 - Quota-based submission system (min/max per faculty)
 - Total max submission cap
 - Advanced, realistic "Persona" system:
-  - 'officer': Engaged, positive, high participation
-  - 'default': Neutral, low participation
-  - 'disengaged': Negative, no participation
-  - 'straight_liner': Answers "Somewhat Agree" to all
-- Conditional logic (e.g., years affiliated matches prior participation)
-- Realistic "Other" field entry
-- 4-minute (approx.) submission speed
+  - 'officer', 'default', 'disengaged', 'straight_liner'
+- Conditional logic (e.G., years affiliated matches prior participation)
+- Realistic "Other" field entry with HUMAN-LIKE TYPING.
+- "THINKING" DELAYS: Simulates reading time *before* answering.
 - Resilient page-loading with 3x retry
 - Professional logging to both console and file (automation.log)
 """
@@ -24,6 +22,8 @@ import re
 import asyncio
 import copy
 import logging
+import json # NEW: For state persistence
+import os   # NEW: For checking if files exist
 from playwright.async_api import async_playwright
 from faker import Faker
 
@@ -38,7 +38,8 @@ logging.basicConfig(
         logging.StreamHandler()                # Prints logs to the console
     ]
 )
-logging.getLogger("playwright").setLevel(logging.WARNING) # Quiets Playwright's own logs
+# Quiets Playwright's own logs to keep ours clean
+logging.getLogger("playwright").setLevel(logging.WARNING) 
 
 fake = Faker()
 
@@ -57,8 +58,11 @@ FACULTY_TARGETS = {
 # ----------------------------------------
 
 # --- ⏱️ Submission Speed (EDIT THESE) ---
+# Simulates "thinking" time before answering
 QUESTION_MIN_DELAY = 5.0
 QUESTION_MAX_DELAY = 7.0
+
+# Delay between one submission finishing and the next one starting
 SUBMISSION_MIN_DELAY = 3.0
 SUBMISSION_MAX_DELAY = 5.0
 # ----------------------------------------
@@ -67,24 +71,22 @@ SUBMISSION_MAX_DELAY = 5.0
 TOTAL_MAX_SUBMISSIONS = 400 
 FORM_URL = "https://forms.office.com/r/tq1WJ0CWT0"
 HEADLESS = False  # Set to True for faster, background execution
+
+# --- NEW: File names for persistence ---
 LOG_CSV = "submitted_responses.csv"
+STATE_FILE = "submission_state.json" # Stores faculty counts
 
 # --- 🤖 Persona / Answer Configuration ---
-
-# Probabilities for picking a persona
 PERSONA_CHOICES = ['default', 'officer', 'disengaged', 'straight_liner']
-PERSONA_WEIGHTS = [0.50,       0.25,      0.15,         0.10] # 50% default, 25% officer, 15% disengaged, 10% straight-liner
+PERSONA_WEIGHTS = [0.50,       0.25,      0.15,         0.10] 
 
-# Likert choices for each persona
 PERSONA_LIKERT_WEIGHTS = {
     "officer": [0.05, 0.10, 0.20, 0.45, 0.20], # Positive
     "default": [0.15, 0.30, 0.35, 0.15, 0.05], # Neutral
     "disengaged": [0.40, 0.30, 0.20, 0.05, 0.05]  # Negative
-    # "straight_liner" is handled with a special case
 }
 LIKERT_CHOICES = ["Strongly Disagree", "Disagree", "Somewhat Agree", "Agree", "Strongly Agree"]
 
-# NEW: Realistic "Other" answers
 REALISTIC_OTHER_SOURCES = [
     "From a professor in class",
     "Saw a poster on campus",
@@ -110,35 +112,22 @@ async def rand_sleep(min_delay, max_delay):
     await asyncio.sleep(random.uniform(min_delay, max_delay))
 
 def pick_likert(persona='default'):
-    """
-    (Sync) Selects a Likert choice based on the persona.
-    (UPDATED with 'straight_liner' and 'inconsistent' logic)
-    """
-    # 1. Handle special "straight_liner" case
+    """ (UPDATED) Selects a Likert choice based on the persona. """
     if persona == 'straight_liner':
         return "Somewhat Agree"
     
-    # 2. Handle "inconsistent officer" case (10% chance of random negative answer)
-    if persona == 'officer' and random.random() < 0.10:
+    if persona == 'officer' and random.random() < 0.10: # 10% inconsistent
         return random.choice(["Disagree", "Strongly Disagree"])
 
-    # 3. Handle normal cases
     weights = PERSONA_LIKERT_WEIGHTS.get(persona, PERSONA_LIKERT_WEIGHTS['default'])
     return random.choices(LIKERT_CHOICES, weights=weights, k=1)[0]
 
-# --- NEW: Function to build a consistent profile ---
 def create_persona_profile():
-    """
-    Generates a logically consistent profile for a single submission.
-    Returns a dictionary of pre-selected demographic answers.
-    """
+    """ (UPDATED) Generates a logically consistent profile. """
     profile = {}
-    
-    # 1. Pick the core persona
     persona_type = random.choices(PERSONA_CHOICES, PERSONA_WEIGHTS, k=1)[0]
     profile["persona_type"] = persona_type
 
-    # 2. Generate consistent demographics based on persona
     if persona_type == 'officer':
         profile["role"] = "Student with position in student organization (officer to member)"
         profile["years_affiliated"] = random.choice(["1 - 3 Years", "4 - 6 Years"])
@@ -149,30 +138,22 @@ def create_persona_profile():
         profile["years_affiliated"] = random.choice(years_affiliated)
         profile["prior_csr"] = "None"
     
-    elif persona_type == 'straight_liner':
+    else: # 'default' or 'straight_liner'
         profile["role"] = "Student"
         profile["years_affiliated"] = random.choice(years_affiliated)
-        profile["prior_csr"] = random.choice(["None", "1 - 2"])
-
-    else: # 'default'
-        profile["role"] = "Student"
-        profile["years_affiliated"] = random.choice(years_affiliated)
-        # Make 'prior_csr' consistent with 'years_affiliated'
         if profile["years_affiliated"] == "Less than 1 year":
             profile["prior_csr"] = random.choice(["None", "1 - 2"])
         else:
             profile["prior_csr"] = random.choice(["None", "1 - 2", "3 - 5"])
             
     return profile
-# --- End of new function ---
 
 
 async def fill_all_questions(page, profile):
     """
     Finds all VISIBLE question blocks on the page and fills them.
-    (UPDATED: Takes a pre-built 'profile' dictionary)
+    (UPDATED with "thinking" time and human-like typing)
     """
-    # Start with the profile, add more answers as we go
     all_answers = profile.copy() 
     all_likert_answers = []
 
@@ -196,7 +177,6 @@ async def fill_all_questions(page, profile):
         "Strongly Disagree": 0, "Disagree": 1, "Somewhat Agree": 2,
         "Agree": 3, "Strongly Agree": 4
     }
-
     async def click_likert_option(block_locator, choice_string):
         try:
             await block_locator.scroll_into_view_if_needed()
@@ -210,7 +190,12 @@ async def fill_all_questions(page, profile):
     # --- Helper 3: For "Other" text input ---
     async def fill_text_input(block_locator, text):
         try:
-            await block_locator.locator("input[type='text']").fill(text)
+            # === NEW: Human-like typing ===
+            logging.info("  ... typing 'Other' field.")
+            await block_locator.locator("input[type='text']").press_sequentially(
+                text, delay=random.randint(50, 150)
+            )
+            # ==============================
             return True
         except Exception as e:
             logging.warning(f"Could not fill 'Other' text. Error: {e}")
@@ -226,6 +211,13 @@ async def fill_all_questions(page, profile):
 
     for i in range(count):
         block = blocks_locator.nth(i)
+        
+        # === NEW: "Thinking" Time ===
+        # Simulate reading the question *before* answering
+        logging.info(f"  ... 'reading' question {i+1}/{count}, sleeping {QUESTION_MIN_DELAY}-{QUESTION_MAX_DELAY}s...")
+        await rand_sleep(QUESTION_MIN_DELAY, QUESTION_MAX_DELAY)
+        # ============================
+        
         txt_content = await block.text_content()
         if not txt_content: continue
         txt = txt_content.lower()
@@ -237,13 +229,10 @@ async def fill_all_questions(page, profile):
         # === Smart Logic: Use pre-built profile ===
         if "faculty" in txt:
             await click_option(block, all_answers["faculty"])
-
         elif "describes you" in txt:
             await click_option(block, all_answers["role"])
-
         elif "years affiliated" in txt:
             await click_option(block, all_answers["years_affiliated"])
-
         elif "prior participation" in txt: 
             await click_option(block, all_answers["prior_csr"])
 
@@ -251,29 +240,24 @@ async def fill_all_questions(page, profile):
         elif "sex" in txt and "birth" in txt:
             val = random.choice(sex)
             if await click_option(block, val): all_answers["sex"] = val
-
         elif "primary source" in txt:
-            # 5% Chance to fill "Other" with a realistic answer
-            if random.random() < 0.05:
+            if random.random() < 0.05: # 5% Chance
                 if await click_option(block, "Other"):
                     other_text = random.choice(REALISTIC_OTHER_SOURCES)
                     await fill_text_input(block, other_text)
                     all_answers["csr_sources"] = f"Other: {other_text}"
             else:
-                choices = random.sample(csr_info_sources[:-1], k=random.randint(1, 3)) # [:-1] excludes "Other"
+                choices = random.sample(csr_info_sources[:-1], k=random.randint(1, 3))
                 for c in choices:
                     await click_option(block, c)
                     await asyncio.sleep(0.2)
                 all_answers["csr_sources"] = ", ".join(choices)
-        
         else:
-            # This is a Likert question
             choice = pick_likert(all_answers["persona_type"]) 
             if await click_likert_option(block, choice):
                 all_likert_answers.append(choice)
         
-        logging.info(f"  ... answered question {i+1}/{count}, sleeping {QUESTION_MIN_DELAY}-{QUESTION_MAX_DELAY}s...")
-        await rand_sleep(QUESTION_MIN_DELAY, QUESTION_MAX_DELAY) 
+        # (The delay is now at the start of the loop)
         
     all_answers["likert_answers"] = ", ".join(all_likert_answers)
     return all_answers
@@ -282,11 +266,27 @@ async def fill_all_questions(page, profile):
 async def main():
     """
     Main function with a quota-based system.
-    (UPDATED to use create_persona_profile)
+    (UPDATED with State Persistence)
     """
+    logging.info("=============================================")
     logging.info("Starting automation with respondent quotas...")
     
+    # === NEW: Load State from File ===
     faculty_targets = copy.deepcopy(FACULTY_TARGETS)
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                saved_state = json.load(f)
+            logging.info(f"Found state file '{STATE_FILE}'. Resuming progress...")
+            for faculty_name, data in saved_state.items():
+                if faculty_name in faculty_targets:
+                    faculty_targets[faculty_name]["count"] = data.get("count", 0)
+        except Exception as e:
+            logging.warning(f"Could not load state file: {e}. Starting a fresh run.")
+    else:
+        logging.info(f"No state file '{STATE_FILE}' found. Starting a fresh run.")
+    # ==================================
+    
     total_min_needed = sum(d["min"] for d in faculty_targets.values())
     logging.info(f"Target: At least {total_min_needed} total submissions.")
     logging.info(f"Absolute Stop: Script will stop if it reaches {TOTAL_MAX_SUBMISSIONS} total submissions.")
@@ -296,12 +296,19 @@ async def main():
         "prior_csr", "csr_sources", "likert_answers", "persona_type"
     ]
     
-    submission_counter = 0
+    # Check if CSV exists to decide on writing headers
+    csv_file_exists = os.path.exists(LOG_CSV)
+    
+    submission_counter = sum(d["count"] for d in faculty_targets.values()) # Start count from saved state
+    logging.info(f"Resuming with {submission_counter} total submissions already logged.")
 
     try:
-        with open(LOG_CSV, "w", newline="", encoding="utf-8") as f:
+        # === NEW: Open CSV in 'append' mode ===
+        with open(LOG_CSV, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(headers) # Write headers
+            if not csv_file_exists or f.tell() == 0:
+                writer.writerow(headers) # Write headers only if file is new/empty
+            # ====================================
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
@@ -319,7 +326,6 @@ async def main():
                     submission_counter += 1
                     logging.info(f"\n--- Starting Submission {submission_counter} ---")
 
-                    # 1. Select faculty based on quota
                     available_faculties = [f for f, d in faculty_targets.items() if d["count"] < d["max"]]
                     if not available_faculties:
                         logging.info("All faculties have reached their max. Stopping.")
@@ -332,14 +338,12 @@ async def main():
                     else:
                         selected_faculty = random.choice(available_faculties)
                     
-                    # 2. Create the full, consistent profile
                     profile = create_persona_profile()
-                    profile["faculty"] = selected_faculty # Add the chosen faculty to the profile
+                    profile["faculty"] = selected_faculty
                     
                     logging.info(f"Running for: {selected_faculty} (Persona: {profile['persona_type']})")
                     
                     try:
-                        # 3. Resilient Page Load with 3 Retries
                         for attempt in range(3):
                             try:
                                 await page.goto(FORM_URL, timeout=30000)
@@ -352,7 +356,6 @@ async def main():
                         else: 
                             raise Exception("Page failed to load after 3 attempts.")
                         
-                        # 4. Pass the whole profile to the fill function
                         all_answers = await fill_all_questions(page, profile)
 
                         submit_button = page.locator("button[data-automation-id='submitButton']")
@@ -362,22 +365,30 @@ async def main():
                             logging.error("Could not find Submit button.")
                             continue 
 
-                        # 5. Log and UPDATE THE COUNT
                         if all_answers:
-                            # Log the full profile
                             writer.writerow([
                                 all_answers.get("faculty"), all_answers.get("role"),
                                 all_answers.get("sex"), all_answers.get("years_affiliated"),
                                 all_answers.get("prior_csr"), all_answers.get("csr_sources"),
                                 all_answers.get("likert_answers"),
-                                all_answers.get("persona_type") # Log the persona
+                                all_answers.get("persona_type")
                             ])
+                            f.flush() # Ensure it's written to disk immediately
+                            
                             faculty_targets[selected_faculty]["count"] += 1
                             logging.info(f"Submission {submission_counter} complete and logged for {selected_faculty}.")
+
+                            # === NEW: Save State to File ===
+                            try:
+                                with open(STATE_FILE, 'w') as sf:
+                                    json.dump(faculty_targets, sf, indent=4)
+                                logging.info(f"Progress saved to {STATE_FILE}.")
+                            except Exception as e:
+                                logging.warning(f"Could not save state file: {e}")
+                            # ===============================
                         else:
                             logging.warning(f"Submission {submission_counter} failed, skipping log.")
 
-                        # 6. Check if all MINIMUMS are met
                         all_mins_met = all(d["count"] >= d["min"] for d in faculty_targets.values())
                         if all_mins_met:
                             logging.info("\nAll minimum quotas have been met! Stopping.")
@@ -388,7 +399,7 @@ async def main():
                         await rand_sleep(SUBMISSION_MIN_DELAY, SUBMISSION_MAX_DELAY) 
 
                     except Exception as e:
-                        logging.error(f"Error during submission {submission_counter}: {e}", exc_info=False) # exc_info=True for full trace
+                        logging.error(f"Error during submission {submission_counter}: {e}", exc_info=False)
                         logging.info("Reloading page and skipping to next submission.")
                         await rand_sleep(5, 7)
 
