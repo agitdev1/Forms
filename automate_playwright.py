@@ -67,7 +67,7 @@ SUBMISSION_MIN_DELAY = 3.0
 SUBMISSION_MAX_DELAY = 5.0
 # ----------------------------------------
 
-# --- ⚙️ General Settings (EDIT THESE) ---
+# --- General Settings (EDIT THESE) ---
 TOTAL_MAX_SUBMISSIONS = 400 
 FORM_URL = "https://forms.office.com/r/tq1WJ0CWT0"
 HEADLESS = False  # Set to True for faster, background execution
@@ -76,17 +76,31 @@ HEADLESS = False  # Set to True for faster, background execution
 LOG_CSV = "submitted_responses.csv"
 STATE_FILE = "submission_state.json" # Stores faculty counts
 
-# --- 🤖 Persona / Answer Configuration ---
-PERSONA_CHOICES = ['default', 'officer', 'disengaged', 'straight_liner']
-PERSONA_WEIGHTS = [0.50,       0.25,      0.15,         0.10] 
+# --- Persona / Answer Configuration ---
 
+# NEW: Probabilities for picking a persona
+PERSONA_CHOICES = ['default', 'officer', 'uninformed', 'apathetic', 'busy', 'straight_liner']
+PERSONA_WEIGHTS = [0.40,       0.20,      0.15,         0.10,        0.10,   0.05]
+# (40% default, 20% officer, 15% uninformed, 10% apathetic, 10% busy, 5% straight-liner)
+
+# NEW: Likert keyword lists
+# These keywords match the question groups you provided.
+COMMUNICATION_KEYWORDS = ["communication", "notifies", "well-informed", "find details", "plan ahead"]
+ENGAGEMENT_KEYWORDS = ["voice ideas", "input is asked", "co-create", "accommodate diverse", "approaching organizers", "feedback is openly"]
+MOTIVATION_KEYWORDS = ["belonging", "understanding of community", "build my personal", "aligns with my personal", "social value"]
+ACCESSIBILITY_KEYWORDS = ["Sign-up... is easy", "scheduled at times", "Location... is accessible", "know whom to contact", "preparations... communicated"]
+FEATURE_KEYWORDS = ["centralized dashboard", "feature to RSVP", "showcase my past", "incentivize my attendance"]
+IMPACT_KEYWORDS = ["marginalized or indigenous", "direct positive impact", "feel proud"]
+
+# Likert choices for each persona
 PERSONA_LIKERT_WEIGHTS = {
     "officer": [0.05, 0.10, 0.20, 0.45, 0.20], # Positive
     "default": [0.15, 0.30, 0.35, 0.15, 0.05], # Neutral
-    "disengaged": [0.40, 0.30, 0.20, 0.05, 0.05]  # Negative
+    "disengaged": [0.40, 0.30, 0.20, 0.05, 0.05]  # Negative (Used by 'apathetic')
 }
 LIKERT_CHOICES = ["Strongly Disagree", "Disagree", "Somewhat Agree", "Agree", "Strongly Agree"]
 
+# NEW: Realistic "Other" answers
 REALISTIC_OTHER_SOURCES = [
     "From a professor in class",
     "Saw a poster on campus",
@@ -94,6 +108,8 @@ REALISTIC_OTHER_SOURCES = [
     "From the student handbook",
     "A text from the university"
 ]
+
+# (The rest of your config is the same)
 
 # Base question options
 faculty = ["CITHM", "COT", "CAS", "CIR", "CBA"]
@@ -111,36 +127,74 @@ csr_info_sources = ["Social Media", "Emails", "Peer to peer/ Word of mouth", "Un
 async def rand_sleep(min_delay, max_delay):
     await asyncio.sleep(random.uniform(min_delay, max_delay))
 
-def pick_likert(persona='default'):
-    """ (UPDATED) Selects a Likert choice based on the persona. """
+def pick_likert(persona, question_text):
+    """
+    (NEW) Selects a Likert choice based on the persona AND the question theme.
+    """
+    # 1. Handle special "straight_liner" case
     if persona == 'straight_liner':
         return "Somewhat Agree"
     
-    if persona == 'officer' and random.random() < 0.10: # 10% inconsistent
+    # 2. Handle "inconsistent officer" case (10% chance of random negative answer)
+    if persona == 'officer' and random.random() < 0.10:
         return random.choice(["Disagree", "Strongly Disagree"])
+    
+    # 3. Handle Themed Personas
+    
+    if persona == 'uninformed':
+        if any(k in question_text for k in COMMUNICATION_KEYWORDS):
+            return random.choice(["Strongly Disagree", "Disagree"])
+        if any(k in question_text for k in FEATURE_KEYWORDS):
+            return random.choice(["Agree", "StrongLY Agree"])
+        return random.choice(["Somewhat Agree", "Agree"]) # They are motivated, just uninformed
 
-    weights = PERSONA_LIKERT_WEIGHTS.get(persona, PERSONA_LIKERT_WEIGHTS['default'])
+    elif persona == 'apathetic': # This persona is truly disengaged
+        if any(k in question_text for k in MOTIVATION_KEYWORDS):
+            return random.choice(["Strongly Disagree", "Disagree"])
+        if any(k in question_text for k in FEATURE_KEYWORDS):
+            return random.choice(["Strongly Disagree", "Disagree"])
+        if any(k in question_text for k in COMMUNICATION_KEYWORDS):
+            return random.choice(["Agree", "Somewhat Agree"]) # "Yeah, I see the emails, I just delete them."
+        return random.choice(["Somewhat Agree", "Disagree"])
+
+    elif persona == 'busy':
+        if any(k in question_text for k in ACCESSIBILITY_KEYWORDS):
+            return random.choice(["Strongly Disagree", "Disagree"]) # "The schedule always sucks."
+        if any(k in question_text for k in MOTIVATION_KEYWORDS):
+            return random.choice(["Agree", "StrongLY Agree"]) # "I want to, but I can't."
+        return random.choice(["Somewhat Agree", "Agree"])
+
+    # 4. Handle 'officer' (normal positive) and 'default' (neutral)
+    weights_key = 'officer' if persona == 'officer' else 'default'
+    weights = PERSONA_LIKERT_WEIGHTS.get(weights_key, PERSONA_LIKERT_WEIGHTS['default'])
     return random.choices(LIKERT_CHOICES, weights=weights, k=1)[0]
 
 def create_persona_profile():
-    """ (UPDATED) Generates a logically consistent profile. """
+    """
+    Generates a logically consistent profile for a single submission.
+    Returns a dictionary of pre-selected demographic answers.
+    """
     profile = {}
+    
+    # 1. Pick the core persona
     persona_type = random.choices(PERSONA_CHOICES, PERSONA_WEIGHTS, k=1)[0]
     profile["persona_type"] = persona_type
 
+    # 2. Generate consistent demographics based on persona
     if persona_type == 'officer':
         profile["role"] = "Student with position in student organization (officer to member)"
         profile["years_affiliated"] = random.choice(["1 - 3 Years", "4 - 6 Years"])
         profile["prior_csr"] = random.choice(["3 - 5", "More than 5"])
     
-    elif persona_type == 'disengaged':
+    elif persona_type == 'disengaged' or persona_type == 'apathetic':
         profile["role"] = "Student"
         profile["years_affiliated"] = random.choice(years_affiliated)
         profile["prior_csr"] = "None"
     
-    else: # 'default' or 'straight_liner'
+    else: # 'default', 'busy', 'uninformed', 'straight_liner'
         profile["role"] = "Student"
         profile["years_affiliated"] = random.choice(years_affiliated)
+        # Make 'prior_csr' consistent with 'years_affiliated'
         if profile["years_affiliated"] == "Less than 1 year":
             profile["prior_csr"] = random.choice(["None", "1 - 2"])
         else:
@@ -148,11 +202,10 @@ def create_persona_profile():
             
     return profile
 
-
 async def fill_all_questions(page, profile):
     """
     Finds all VISIBLE question blocks on the page and fills them.
-    (UPDATED with "thinking" time and human-like typing)
+    (UPDATED with themed Likert logic)
     """
     all_answers = profile.copy() 
     all_likert_answers = []
@@ -190,12 +243,9 @@ async def fill_all_questions(page, profile):
     # --- Helper 3: For "Other" text input ---
     async def fill_text_input(block_locator, text):
         try:
-            # === NEW: Human-like typing ===
-            logging.info("  ... typing 'Other' field.")
             await block_locator.locator("input[type='text']").press_sequentially(
                 text, delay=random.randint(50, 150)
             )
-            # ==============================
             return True
         except Exception as e:
             logging.warning(f"Could not fill 'Other' text. Error: {e}")
@@ -212,11 +262,8 @@ async def fill_all_questions(page, profile):
     for i in range(count):
         block = blocks_locator.nth(i)
         
-        # === NEW: "Thinking" Time ===
-        # Simulate reading the question *before* answering
         logging.info(f"  ... 'reading' question {i+1}/{count}, sleeping {QUESTION_MIN_DELAY}-{QUESTION_MAX_DELAY}s...")
         await rand_sleep(QUESTION_MIN_DELAY, QUESTION_MAX_DELAY)
-        # ============================
         
         txt_content = await block.text_content()
         if not txt_content: continue
@@ -253,11 +300,11 @@ async def fill_all_questions(page, profile):
                     await asyncio.sleep(0.2)
                 all_answers["csr_sources"] = ", ".join(choices)
         else:
-            choice = pick_likert(all_answers["persona_type"]) 
+            # === NEW: Use smart, themed Likert picker ===
+            # We pass the persona and the actual question text
+            choice = pick_likert(all_answers["persona_type"], txt) 
             if await click_likert_option(block, choice):
                 all_likert_answers.append(choice)
-        
-        # (The delay is now at the start of the loop)
         
     all_answers["likert_answers"] = ", ".join(all_likert_answers)
     return all_answers
