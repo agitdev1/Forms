@@ -1,0 +1,27 @@
+{
+    "CITHM": {
+        "min": 201,
+        "max": 268,
+        "count": 1
+    },
+    "COT": {
+        "min": 21,
+        "max": 28,
+        "count": 0
+    },
+    "CIR": {
+        "min": 7,
+        "max": 9,
+        "count": 0
+    },
+    "CBA": {
+        "min": 41,
+        "max": 55,
+        "count": 0
+    },
+    "CAS": {
+        "min": 30,
+        "max": 40,
+        "count": 1
+    }
+}

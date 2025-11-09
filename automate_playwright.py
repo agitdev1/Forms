@@ -14,7 +14,7 @@ Features:
 - Resilient page-loading with 3x retry
 - Professional logging to both console and file (automation.log)
 """
-
+from config import *
 import time
 import random
 import csv
@@ -43,85 +43,7 @@ logging.getLogger("playwright").setLevel(logging.WARNING)
 
 fake = Faker()
 
-# ===================================================================
-# ========================== CONFIG =================================
-# ===================================================================
 
-# --- 🎯 Respondent Quotas (EDIT THESE) ---
-FACULTY_TARGETS = {
-    "CITHM": {"min": 201, "max": 268, "count": 0},
-    "COT":   {"min": 21,  "max": 28,  "count": 0},
-    "CIR":   {"min": 7,   "max": 9,   "count": 0},
-    "CBA":   {"min": 41,  "max": 55,  "count": 0},
-    "CAS":   {"min": 30,  "max": 40,  "count": 0},
-}
-# ----------------------------------------
-
-# --- ⏱️ Submission Speed (EDIT THESE) ---
-# Simulates "thinking" time before answering
-QUESTION_MIN_DELAY = 5.0
-QUESTION_MAX_DELAY = 7.0
-
-# Delay between one submission finishing and the next one starting
-SUBMISSION_MIN_DELAY = 3.0
-SUBMISSION_MAX_DELAY = 5.0
-# ----------------------------------------
-
-# --- General Settings (EDIT THESE) ---
-TOTAL_MAX_SUBMISSIONS = 400 
-FORM_URL = "https://forms.office.com/r/tq1WJ0CWT0"
-HEADLESS = False  # Set to True for faster, background execution
-
-# --- NEW: File names for persistence ---
-LOG_CSV = "submitted_responses.csv"
-STATE_FILE = "submission_state.json" # Stores faculty counts
-
-# --- Persona / Answer Configuration ---
-
-# NEW: Probabilities for picking a persona
-PERSONA_CHOICES = ['default', 'officer', 'uninformed', 'apathetic', 'busy', 'straight_liner']
-PERSONA_WEIGHTS = [0.40,       0.20,      0.15,         0.10,        0.10,   0.05]
-# (40% default, 20% officer, 15% uninformed, 10% apathetic, 10% busy, 5% straight-liner)
-
-# NEW: Likert keyword lists
-# These keywords match the question groups you provided.
-COMMUNICATION_KEYWORDS = ["communication", "notifies", "well-informed", "find details", "plan ahead"]
-ENGAGEMENT_KEYWORDS = ["voice ideas", "input is asked", "co-create", "accommodate diverse", "approaching organizers", "feedback is openly"]
-MOTIVATION_KEYWORDS = ["belonging", "understanding of community", "build my personal", "aligns with my personal", "social value"]
-ACCESSIBILITY_KEYWORDS = ["Sign-up... is easy", "scheduled at times", "Location... is accessible", "know whom to contact", "preparations... communicated"]
-FEATURE_KEYWORDS = ["centralized dashboard", "feature to RSVP", "showcase my past", "incentivize my attendance"]
-IMPACT_KEYWORDS = ["marginalized or indigenous", "direct positive impact", "feel proud"]
-
-# Likert choices for each persona
-PERSONA_LIKERT_WEIGHTS = {
-    "officer": [0.05, 0.10, 0.20, 0.45, 0.20], # Positive
-    "default": [0.15, 0.30, 0.35, 0.15, 0.05], # Neutral
-    "disengaged": [0.40, 0.30, 0.20, 0.05, 0.05]  # Negative (Used by 'apathetic')
-}
-LIKERT_CHOICES = ["Strongly Disagree", "Disagree", "Somewhat Agree", "Agree", "Strongly Agree"]
-
-# NEW: Realistic "Other" answers
-REALISTIC_OTHER_SOURCES = [
-    "From a professor in class",
-    "Saw a poster on campus",
-    "A friend told me",
-    "From the student handbook",
-    "A text from the university"
-]
-
-# (The rest of your config is the same)
-
-# Base question options
-faculty = ["CITHM", "COT", "CAS", "CIR", "CBA"]
-role = ["Student", "Student with position in student organization (officer to member)"]
-sex = ["Male", "Female", "Prefer not to say"]
-years_affiliated = ["Less than 1 year", "1 - 3 Years", "4 - 6 Years"]
-prior_csr = ["None", "1 - 2", "3 - 5", "More than 5"]
-csr_info_sources = ["Social Media", "Emails", "Peer to peer/ Word of mouth", "University website/portal", "Other"]
-
-# ===================================================================
-# ====================== END OF CONFIG ==============================
-# ===================================================================
 
 
 async def rand_sleep(min_delay, max_delay):
@@ -205,10 +127,16 @@ def create_persona_profile():
 async def fill_all_questions(page, profile):
     """
     Finds all VISIBLE question blocks on the page and fills them.
-    (UPDATED with themed Likert logic)
+    (CORRECTED to use PERSONA_DELAYS from CONFIG)
     """
     all_answers = profile.copy() 
     all_likert_answers = []
+    
+    # === FIX: Get the persona type and delays from the profile ===
+    persona_type = all_answers.get("persona_type", "default")
+    # Get the min/max delays for this persona from the CONFIG
+    min_delay, max_delay = PERSONA_DELAYS.get(persona_type, (3.0, 5.0)) # Fallback to 3-5s
+    # ==========================================================
 
     # --- Helper 1: For standard radio/checkboxes ---
     async def click_option(block_locator, value_text):
@@ -243,8 +171,11 @@ async def fill_all_questions(page, profile):
     # --- Helper 3: For "Other" text input ---
     async def fill_text_input(block_locator, text):
         try:
+            # Use a faster typing delay for "rushing" personas
+            typing_delay = random.randint(10, 50) if persona_type in ['busy', 'disengaged', 'straight_liner'] else random.randint(50, 150)
+            
             await block_locator.locator("input[type='text']").press_sequentially(
-                text, delay=random.randint(50, 150)
+                text, delay=typing_delay
             )
             return True
         except Exception as e:
@@ -252,18 +183,23 @@ async def fill_all_questions(page, profile):
             return False
     # --- End of helpers ---
 
-    blocks_locator = page.locator("div[data-automation-id='questionItem']")
+    blocks_locator = page.locator(
+    "div[data-automation-id='questionItem'], " +
+    "div[class*='question-item-content']"
+)
     count = await blocks_locator.count()
     if count == 0:
         logging.warning("No question blocks found on this page.")
         return {}
-    logging.info(f"Found {count} question blocks to fill...")
+    logging.info(f"Found {count} question blocks to fill... (Persona: {persona_type}, Speed: {min_delay}-{max_delay}s)")
 
     for i in range(count):
         block = blocks_locator.nth(i)
         
-        logging.info(f"  ... 'reading' question {i+1}/{count}, sleeping {QUESTION_MIN_DELAY}-{QUESTION_MAX_DELAY}s...")
-        await rand_sleep(QUESTION_MIN_DELAY, QUESTION_MAX_DELAY)
+        # === FIX: Use persona-based "Thinking" Time ===
+        logging.info(f"  ... 'reading' question {i+1}/{count}, sleeping {min_delay}-{max_delay}s...")
+        await rand_sleep(min_delay, max_delay)
+        # ============================================
         
         txt_content = await block.text_content()
         if not txt_content: continue
@@ -300,9 +236,8 @@ async def fill_all_questions(page, profile):
                     await asyncio.sleep(0.2)
                 all_answers["csr_sources"] = ", ".join(choices)
         else:
-            # === NEW: Use smart, themed Likert picker ===
-            # We pass the persona and the actual question text
-            choice = pick_likert(all_answers["persona_type"], txt) 
+            # Use smart, themed Likert picker
+            choice = pick_likert(persona_type, txt) 
             if await click_likert_option(block, choice):
                 all_likert_answers.append(choice)
         
