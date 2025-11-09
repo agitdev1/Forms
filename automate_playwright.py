@@ -127,16 +127,15 @@ def create_persona_profile():
 async def fill_all_questions(page, profile):
     """
     Finds all VISIBLE question blocks on the page and fills them.
-    (CORRECTED to use PERSONA_DELAYS from CONFIG)
+    (UPDATED: Removed "Other" logic for question 6)
     """
     all_answers = profile.copy() 
     all_likert_answers = []
     
-    # === FIX: Get the persona type and delays from the profile ===
+    # Get the persona type to determine speed
     persona_type = all_answers.get("persona_type", "default")
-    # Get the min/max delays for this persona from the CONFIG
+    # Get the min/max delays for this persona
     min_delay, max_delay = PERSONA_DELAYS.get(persona_type, (3.0, 5.0)) # Fallback to 3-5s
-    # ==========================================================
 
     # --- Helper 1: For standard radio/checkboxes ---
     async def click_option(block_locator, value_text):
@@ -168,12 +167,10 @@ async def fill_all_questions(page, profile):
             logging.warning(f"Could not click LIKERT option '{choice_string}' at index {index}. Error: {e}")
             return False
             
-    # --- Helper 3: For "Other" text input ---
+    # --- Helper 3: For "Other" text input (No longer used, but good to keep) ---
     async def fill_text_input(block_locator, text):
         try:
-            # Use a faster typing delay for "rushing" personas
             typing_delay = random.randint(10, 50) if persona_type in ['busy', 'disengaged', 'straight_liner'] else random.randint(50, 150)
-            
             await block_locator.locator("input[type='text']").press_sequentially(
                 text, delay=typing_delay
             )
@@ -183,10 +180,7 @@ async def fill_all_questions(page, profile):
             return False
     # --- End of helpers ---
 
-    blocks_locator = page.locator(
-    "div[data-automation-id='questionItem'], " +
-    "div[class*='question-item-content']"
-)
+    blocks_locator = page.locator("div[data-automation-id='questionItem']")
     count = await blocks_locator.count()
     if count == 0:
         logging.warning("No question blocks found on this page.")
@@ -196,10 +190,8 @@ async def fill_all_questions(page, profile):
     for i in range(count):
         block = blocks_locator.nth(i)
         
-        # === FIX: Use persona-based "Thinking" Time ===
         logging.info(f"  ... 'reading' question {i+1}/{count}, sleeping {min_delay}-{max_delay}s...")
         await rand_sleep(min_delay, max_delay)
-        # ============================================
         
         txt_content = await block.text_content()
         if not txt_content: continue
@@ -223,20 +215,20 @@ async def fill_all_questions(page, profile):
         elif "sex" in txt and "birth" in txt:
             val = random.choice(sex)
             if await click_option(block, val): all_answers["sex"] = val
+            
         elif "primary source" in txt:
-            if random.random() < 0.05: # 5% Chance
-                if await click_option(block, "Other"):
-                    other_text = random.choice(REALISTIC_OTHER_SOURCES)
-                    await fill_text_input(block, other_text)
-                    all_answers["csr_sources"] = f"Other: {other_text}"
-            else:
-                choices = random.sample(csr_info_sources[:-1], k=random.randint(1, 3))
-                for c in choices:
-                    await click_option(block, c)
-                    await asyncio.sleep(0.2)
-                all_answers["csr_sources"] = ", ".join(choices)
+            # === "Other" logic has been removed ===
+            # The 'csr_info_sources' list in CONFIG still has "Other",
+            # so [:-1] correctly excludes it from the choices.
+            choices = random.sample(csr_info_sources[:-1], k=random.randint(1, 3))
+            for c in choices:
+                await click_option(block, c)
+                await asyncio.sleep(0.2)
+            all_answers["csr_sources"] = ", ".join(choices)
+            # ======================================
+            
         else:
-            # Use smart, themed Likert picker
+            # This is a Likert question
             choice = pick_likert(persona_type, txt) 
             if await click_likert_option(block, choice):
                 all_likert_answers.append(choice)
