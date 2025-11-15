@@ -1,11 +1,12 @@
-# 🤖 Automated Forms Submitter (v4 - Advanced)
+# 🤖 Automated Forms Submitter (v6 - Advanced)
 
 This script uses **Playwright** to automatically fill out and submit a Microsoft Forms survey. It is an advanced tool designed to generate a highly realistic set of test data based on specific quotas.
 
-It avoids bot detection by simulating human behavior, including "thinking" time, persona-based delays, and logical answer patterns.
+It avoids bot detection by simulating human behavior, including "thinking" time, persona-based delays, and logical answer patterns. It is also "crash-proof" and can be stopped and restarted without losing progress.
 
 ## ✨ Key Features
-* **State Persistence (Crash-Proof):** Saves progress to `submission_state.json` and resumes on restart.
+* **State Persistence (Crash-Proof):** Saves progress to `submission_state.json` after every submission. If the script is stopped, it will resume from where it left off.
+* **Handles "Virtual Scrolling":** The script is smart enough to handle forms that load questions dynamically as you scroll.
 * **Quota System:** Submits a specific `min`/`max` number of responses for different groups (e.g., "CITHM", "COT").
 * **Total Max Limit:** A master kill-switch to stop the script after a total number of submissions (e.g., 400).
 * **Advanced Themed Personas:** Creates logical profiles for each submission:
@@ -13,6 +14,8 @@ It avoids bot detection by simulating human behavior, including "thinking" time,
     * **`uninformed`**: Motivated but critical of communication.
     * **`apathetic`**: Disengaged, negative on motivation questions.
     * **`busy`**: Motivated but critical of event scheduling/accessibility.
+    * **`skeptic`**: Believes the CSR is just for PR and has no real impact.
+    * **`incentive_driven`**: Only cares about rewards (certificates, etc.).
     * **`straight_liner`**: Clicks "Somewhat Agree" for all Likert questions.
 * **Human-like Behavior:**
     * **"Thinking" Time:** Pauses *before* answering each question to simulate reading.
@@ -128,7 +131,7 @@ Open the `automate_playwright.py` file in any text editor. All settings are in t
 * **To change persona probabilities:**
     Edit the weights in `PERSONA_WEIGHTS` (must sum to 1.0).
     ```python
-    PERSONA_WEIGHTS = [0.40, 0.20, 0.15, 0.10, 0.10, 0.05]
+    PERSONA_WEIGHTS = [0.35, 0.10, 0.15, 0.10, 0.10, 0.05, 0.10, 0.05]
     ```
 
 * **To run in the background:**
