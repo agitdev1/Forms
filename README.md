@@ -1,16 +1,36 @@
-# Automated Forms Submitter
+# 🤖 Automated Forms Submitter (v4 - Advanced)
 
-This script uses **Playwright** to automatically fill out and submit a Microsoft Forms survey. It's designed to generate a realistic set of test data based on specific quotas.
+This script uses **Playwright** to automatically fill out and submit a Microsoft Forms survey. It is an advanced tool designed to generate a highly realistic set of test data based on specific quotas.
 
-It avoids being detected as a bot by using "smart" personas (e.g., a "student officer" will answer more positively) and by taking a realistic amount of time to fill out each form (approx. 4-5 minutes per submission).
+It avoids bot detection by simulating human behavior, including "thinking" time, persona-based delays, and logical answer patterns.
 
-## Key Features
-* **No More Driver Errors:** Uses Playwright, which manages its own browser drivers.
-* **Quota System:** Submits a specific `min`/`max` number of responses for different groups (e.t., "CITHM", "COT").
+## ✨ Key Features
+* **State Persistence (Crash-Proof):** Saves progress to `submission_state.json` and resumes on restart.
+* **Quota System:** Submits a specific `min`/`max` number of responses for different groups (e.g., "CITHM", "COT").
 * **Total Max Limit:** A master kill-switch to stop the script after a total number of submissions (e.g., 400).
-* **Smart Personas:** Randomly chooses between a "default" student and an "officer" persona to give different sets of answers.
-* **Realistic Delays:** Waits 5-7 seconds after answering *each* question to simulate a human reading the form.
-* **Logs Output:** Saves all submitted data to `submitted_responses.csv`.
+* **Advanced Themed Personas:** Creates logical profiles for each submission:
+    * **`officer`**: Engaged, positive, high participation.
+    * **`uninformed`**: Motivated but critical of communication.
+    * **`apathetic`**: Disengaged, negative on motivation questions.
+    * **`busy`**: Motivated but critical of event scheduling/accessibility.
+    * **`straight_liner`**: Clicks "Somewhat Agree" for all Likert questions.
+* **Human-like Behavior:**
+    * **"Thinking" Time:** Pauses *before* answering each question to simulate reading.
+    * **Persona Delays:** "Disengaged" personas answer much faster than "officer" personas.
+* **Resilient Loading:** Retries up to 3 times if the page fails to load.
+* **Professional Logging:** Logs all actions to both the console and a file (`automation.log`).
+
+---
+
+## 📂 File Structure
+
+When you run the script, your folder will look like this:
+
+* **`automate_playwright.py`**: The main Python script you edit and run.
+* **`venv/`**: The Python virtual environment folder.
+* **`automation.log`**: A log file with a detailed history of every action the script takes.
+* **`submitted_responses.csv`**: The final output file with all the data. You can open this in Excel.
+* **`submission_state.json`**: The crash-proof save file. It stores the current submission counts. **Do not delete this** if you want to resume a run.
 
 ---
 
@@ -20,12 +40,13 @@ You must follow these steps *exactly* to set up the script for the first time.
 
 ### 1. Install Official Python (Crucial!)
 
-This script **will not work** with the Python version from the Microsoft Store.
+This script **will not work** with the Python version from the Microsoft Store due to permission issues.
 
 1.  Go to the official Python website: [**https://www.python.org/downloads/**](https://www.python.org/downloads/)
 2.  Download the installer (e.g., Python 3.12).
 3.  Run the installer. **This is the most important step:**
     On the first screen, check the box that says **"Add python.exe to PATH"**.
+    
 4.  Click "Install Now" and finish the installation.
 
 ### 2. Set Up the Project Folder
@@ -47,7 +68,7 @@ This script **will not work** with the Python version from the Microsoft Store.
     ```
     *(Your terminal prompt will now look like `(.venv) PS C:\Forms> `)*
 
-7.  **Install Libraries:** With the environment active, run this:
+7.  **Install Required Packages:** With the environment active, run this command to install `playwright` and `faker`.
     ```bash
     pip install playwright faker
     ```
@@ -65,51 +86,60 @@ You are now set up and ready to run the script.
 1.  Open a new terminal.
 2.  Navigate to your folder: `cd C:\Forms`
 3.  Activate the environment: `.\venv\Scripts\activate`
-4.  Run the script:
+4.  Run the script by its file name:
     ```bash
     python automate_playwright.py
     ```
 
-A browser window will open and begin the automation. You will see its progress in the terminal. The script will run until all minimum quotas are met or it hits the `TOTAL_MAX_SUBMISSIONS` limit, and then it will stop by itself.
+A browser window will open and begin the automation. You will see its progress in the terminal and in the `automation.log` file. The script will run until all minimum quotas are met or it hits the `TOTAL_MAX_SUBMISSIONS` limit.
+
+**To resume a stopped script,** just run the command again. It will read the `submission_state.json` file and continue.
 
 ---
 
 ## 🔧 Configuration (How to Edit)
 
-Open the `automate_playwright.py` file in any text editor. All the settings you'd want to change are in the `CONFIG` block at the very top.
+Open the `automate_playwright.py` file in any text editor. All settings are in the `CONFIG` block at the top.
 
 * **To change respondent numbers:**
     Edit the `min` and `max` values in `FACULTY_TARGETS`.
     ```python
     FACULTY_TARGETS = {
         "CITHM": {"min": 201, "max": 268, "count": 0},
-        "COT":   {"min": 21,  "max": 28,  "count": 0},
         # ...etc
     }
     ```
 
 * **To change the total number of submissions:**
-    Edit the `TOTAL_MAX_SUBMISSIONS` number. The script will stop when it hits this *or* when all minimums are met, whichever happens first.
+    Edit the `TOTAL_MAX_SUBMISSIONS` number.
     ```python
     TOTAL_MAX_SUBMISSIONS = 400
     ```
 
-* **To make it faster or slower:**
-    Change the delay (in seconds) for each question.
+* **To change the "thinking" speed:**
+    Edit the min/max second values in `PERSONA_DELAYS`.
     ```python
-    QUESTION_MIN_DELAY = 5.0
-    QUESTION_MAX_DELAY = 7.0
+    PERSONA_DELAYS = {
+        "officer": (5.0, 8.0),  # Slow and careful
+        "straight_liner": (0.5, 1.5)   # Very fast
+        # ...etc
+    }
+    ```
+* **To change persona probabilities:**
+    Edit the weights in `PERSONA_WEIGHTS` (must sum to 1.0).
+    ```python
+    PERSONA_WEIGHTS = [0.40, 0.20, 0.15, 0.10, 0.10, 0.05]
     ```
 
 * **To run in the background:**
-    Change `HEADLESS` to `True`. The browser window will not open, but the script will still run (and be much faster).
+    Change `HEADLESS` to `True`. The browser window will not open.
     ```python
     HEADLESS = True
     ```
 
 ---
 
-## Troubleshooting
+## ⚠️ Troubleshooting
 
 **Problem:** You get an error like `[WinError 193] %1 is not a valid Win32 application` or `Python was not found...`
 
@@ -119,4 +149,4 @@ Open the `automate_playwright.py` file in any text editor. All the settings you'
 1.  Go to "Add or remove programs" and **uninstall** any version of Python you see.
 2.  Follow **Step 1** of the Setup Instructions again to install the official version from `python.org`, making sure to check **"Add to PATH"**.
 3.  If it *still* fails, type **"App execution aliases"** into your Start Menu, open the settings, and **turn off** the aliases for `python.exe` and `python3.exe`.
-4.  Delete your `venv` folder and run the setup steps again.
+4.  Delete your `venv` folder and run the setup steps again from `python -m venv venv`.
